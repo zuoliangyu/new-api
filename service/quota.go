@@ -272,6 +272,21 @@ func PostClaudeConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 		promptTokens -= cacheCreationTokens
 	}
 
+	// Tiered pricing: resolve based on prompt-side tokens
+	promptSideTokens := promptTokens + cacheTokens + cacheCreationTokens
+	var tieredTriggered bool
+	var tieredThreshold int
+	if relayInfo.PriceData.HasTieredPricing && !relayInfo.PriceData.UsePrice {
+		tier := ratio_setting.ResolveTieredPricing(relayInfo.OriginModelName, promptSideTokens)
+		if tier != nil {
+			modelRatio = tier.ModelRatio
+			completionRatio = tier.CompletionRatio
+			cacheRatio = tier.CacheRatio
+			tieredTriggered = true
+			tieredThreshold = tier.Threshold
+		}
+	}
+
 	calculateQuota := 0.0
 	if !relayInfo.PriceData.UsePrice {
 		calculateQuota = float64(promptTokens)
@@ -297,6 +312,9 @@ func PostClaudeConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 	totalTokens := promptTokens + completionTokens
 
 	var logContent string
+	if tieredTriggered {
+		logContent += fmt.Sprintf("分段计费已触发（prompt tokens: %dk，阈值: %dk）", promptSideTokens/1000, tieredThreshold/1000)
+	}
 	// record all the consume log even if quota is 0
 	if totalTokens == 0 {
 		// in this case, must be some error happened
